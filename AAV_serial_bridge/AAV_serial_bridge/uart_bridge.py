@@ -7,6 +7,8 @@ from sensor_msgs.msg import Imu
 import math
 import serial
 import struct
+from socket import *
+import threading
 
 PKT_FMT = '<fffB'
 PKT_SIZE = 13
@@ -21,6 +23,12 @@ class UartBridge(Node):
 
         port = self.get_parameter('port').value
         baud = self.get_parameter('baud').value
+
+        udp_port = 5001
+
+        self.sock = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM)
+        self.sock.bind("",udp_port) #need to setup the ip binding
+
 
         self.ser = serial.Serial(port, baud, timeout=0.01)
 
@@ -48,15 +56,23 @@ class UartBridge(Node):
         self.create_subscription(Imu, '/imu/data', self.imu_callback, 10)
 
         self.pub = self.create_publisher(AckermannDrive, '/driveStatus', 10)
-        self.sub = self.create_subscription(AckermannDrive, '/driveData', self.drive_cb, 10)
+        #self.sub = self.create_subscription(AckermannDrive, '/driveData', self.drive_cb, 10)
+        self.listener = threading.Thread(target=self.drive_cb)
+        self.listener.daemon = True
+        self.listener.start()
+
         self.timer = self.create_timer(0.02, self.read_status)
 
         self.rx_buf = bytearray()
         self.get_logger().info(f'Bridge: {port}@{baud} | /driveData→ESP32→/driveStatus')
 
     def drive_cb(self, msg):
-        self.v = msg.drive.speed  # [m/s]
-        self.delta_desired = msg.drive.steering_angle  # [rad]
+        data, addr = self.sock.recvfrom(16)
+        self.v = data [8:]
+        self.delta_desired = data[:8]
+        
+        #self.v = msg.drive.speed  # [m/s]
+        #self.delta_desired = msg.drive.steering_angle  # [rad]
 
         if abs(self.v) < 0.01:
             return
